@@ -2,87 +2,79 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const PORT = 3000;
+app.use(express.static('public'));
+app.use(express.json());
 
-app.use(express.static(path.join(__dirname, 'public')));
+const chatRooms = {};       // Stores IPs per room
+const messageHistory = {};  // Stores messages per room
 
-// Serve index.html for chat room URLs like /chat/:room
-app.get('/chat/:room', (req, res) => {
+app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// In-memory storage
-const chatRooms = {};       // roomName -> Set of IP strings
-const messageHistory = {};  // roomName -> array of messages
+app.get('/chat/:room', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'chat.html'));
+});
 
-io.on('connection', (socket) => {
-  const room = socket.handshake.query.room;
-  if (!room) {
-    socket.disconnect(true);
-    return;
+app.post('/delete', (req, res) => {
+  const room = req.body.room;
+  const sockets = io.sockets.adapter.rooms.get(room);
+
+  if (sockets) {
+    for (const socketId of sockets) {
+      const socket = io.sockets.sockets.get(socketId);
+      if (socket) {
+        socket.emit('chat deleted');
+        socket.disconnect();
+      }
+    }
   }
 
-  // Get client IP, prefer x-forwarded-for if behind proxy
-  const ip = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
+  delete chatRooms[room];
+  delete messageHistory[room];
 
-  if (!chatRooms[room]) chatRooms[room] = new Set();
-  if (!messageHistory[room]) messageHistory[room] = [];
+  res.sendStatus(200);
+});
+
+io.on('connection', socket => {
+  const ip = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
+  const room = socket.handshake.query.room;
+
+  if (!chatRooms[room]) {
+    chatRooms[room] = new Set();
+    messageHistory[room] = [];
+  }
 
   const ips = chatRooms[room];
 
-  // Enforce max 2 unique IPs per room
   if (!ips.has(ip) && ips.size >= 2) {
-    socket.emit('full', 'Room full — max 2 users allowed.');
-    socket.disconnect(true);
+    socket.emit('full', 'Room is full. Only 2 IPs allowed.');
+    socket.disconnect();
     return;
   }
 
   ips.add(ip);
   socket.join(room);
 
-  // Send message history to newly connected client
-  socket.emit('message history', messageHistory[room]);
+  // Send existing history
+  messageHistory[room].forEach(msg => socket.emit('chat message', msg));
 
-  socket.on('chat message', (msg) => {
-    // Save message and limit history size
-    messageHistory[room].push(msg);
-    if (messageHistory[room].length > 50) messageHistory[room].shift();
-
-    io.to(room).emit('chat message', msg);
-  });
-
-  // Handle delete chat request
-  socket.on('delete chat', () => {
-    // Kick all clients in this room
-    const clients = io.sockets.adapter.rooms.get(room);
-    if (clients) {
-      for (const clientId of clients) {
-        const clientSocket = io.sockets.sockets.get(clientId);
-        if (clientSocket) {
-          clientSocket.emit('chat deleted');
-          clientSocket.disconnect(true);
-        }
-      }
-    }
-    // Clear room data
-    delete chatRooms[room];
-    delete messageHistory[room];
+  socket.on('chat message', msg => {
+    const fullMsg = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    messageHistory[room].push(fullMsg);
+    io.to(room).emit('chat message', fullMsg);
   });
 
   socket.on('disconnect', () => {
-    ips.delete(ip);
-    if (ips.size === 0) {
-      delete chatRooms[room];
-      delete messageHistory[room];
-    }
+    // Do NOT remove IP — first 2 IPs are permanent until delete
   });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server listening on port ${PORT}`);
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
 });
