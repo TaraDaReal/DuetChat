@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Chat</title>
+  <style>
+    #messages { height: 300px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; }
+    #form { margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Chat Room</h1>
+  <div id="messages"></div>
+  <form id="form">
+    <input id="input" autocomplete="off" placeholder="Type message..." />
+    <button>Send</button>
+  </form>
+  <button id="deleteBtn">Delete Chat</button>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const room = window.location.pathname.split('/').pop();
+    const socket = io({ query: { room } });
+
+    const messages = document.getElementById('messages');
+    const form = document.getElementById('form');
+    const input = document.getElementById('input');
+
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+      if (input.value) {
+        socket.emit('chat message', input.value);
+        input.value = '';
+      }
+    });
+
+    socket.on('chat message', msg => {
+      const item = document.createElement('div');
+      item.textContent = msg;
+      messages.appendChild(item);
+      messages.scrollTop = messages.scrollHeight;
+    });
+
+    socket.on('full', msg => {
+      alert(msg);
+      window.location.href = '/';
+    });
+
+    socket.on('chat deleted', () => {
+      alert('Chat was deleted.');
+      window.location.href = '/';
+    });
+
+    document.getElementById('deleteBtn').addEventListener('click', () => {
+      fetch('/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room })
+      }).then(() => {
+        alert('Chat deleted.');
+        window.location.href = '/';
+      });
+    });
+  </script>
+</body>
+</html>
